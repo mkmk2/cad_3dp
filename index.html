@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#1565c0" />
+  <title>かたちづくり</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+</head>
+<body>
+  <header id="toolbar"></header>
+  <main id="main">
+    <div id="view"></div>
+    <div id="warning" hidden></div>
+    <div id="viewtools"></div>
+    <section id="props" hidden></section>
+  </main>
+  <aside id="shapes"></aside>
+  <input id="fileInput" type="file" accept=".json,application/json" hidden />
+  <div id="loading"><div class="spinner"></div><div id="loadingText">じゅんびちゅう…</div></div>
+  <div id="toast" hidden></div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

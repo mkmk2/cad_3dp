@@ -81,6 +81,8 @@ button.shape:hover { border-color: var(--blue); }
 button.shape:active { transform: scale(0.94); }
 button.shape.tpl svg path { fill: #90a4ae; }
 button.shape svg path { fill: currentColor; fill-rule: evenodd; }
+button.shape.strap { color: #455A64; }
+button.shape.strap:hover { border-color: #455A64; }
 
 /* ---------- 下のプロパティパネル ---------- */
 #props {
@@ -96,6 +98,10 @@ button.shape svg path { fill: currentColor; fill-rule: evenodd; }
   box-shadow: 0 0 0 1px var(--line); cursor: pointer; padding: 0; touch-action: manipulation;
 }
 .swatch.on { box-shadow: 0 0 0 3px var(--text); }
+.swatch.carve {
+  background: #ffe0b2; display: flex; align-items: center; justify-content: center; color: #e65100;
+}
+.swatch.carve svg { width: 24px; height: 24px; }
 .swatch.hole {
   background: repeating-linear-gradient(45deg, #b0bec5 0 5px, #eceff1 5px 10px);
   display: flex; align-items: center; justify-content: center; color: #455a64;

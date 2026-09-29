@@ -5,7 +5,7 @@ import { initGeometry, shapeSvgPath } from './geometry.js';
 import {
   state, onChange, emit, checkpoint, undo, redo, canUndo, canRedo, selectedItems,
   addShape, addTemplate, addText, setText, removeSelected, duplicateSelected, toggleHole,
-  setColor, groupSelected, newDocument, loadDocument, setThickness,
+  setColor, groupSelected, newDocument, loadDocument, setThickness, carveSelected, minSizeFor, isThicknessLocked, groupableSelection,
 } from './state.js';
 import { createViewer, normAngle } from './viewer.js';
 import { saveProject, readProject } from './io.js';
@@ -110,12 +110,15 @@ async function start() {
   const tplGrid = document.createElement('div');
   tplGrid.className = 'shape-grid';
   TEMPLATES.forEach((t) => {
-    const def = SHAPES.find((s) => s.id === t.shape);
-    tplGrid.append(shapeBtn(def, `${t.name} (${t.size[0]}×${t.size[1]}mm)`, () => addTemplate(t.id), 'tpl'));
+    tplGrid.append(shapeBtn(t.id, `${t.name} (${t.size[0]}×${t.size[1]}mm)`, () => addTemplate(t.id), 'tpl'));
   });
   const shapeGrid = document.createElement('div');
   shapeGrid.className = 'shape-grid';
-  SHAPES.forEach((def) => shapeGrid.append(shapeBtn(def, def.name, () => addShape(def.id))));
+  SHAPES.filter((def) => !def.panel).forEach((def) => shapeGrid.append(shapeBtn(def, def.name, () => addShape(def.id))));
+  // ストラップホールは別の段に、色を変えて並べる
+  const strapGrid = document.createElement('div');
+  strapGrid.className = 'shape-grid';
+  SHAPES.filter((def) => def.panel === 'strap').forEach((def) => strapGrid.append(shapeBtn(def, def.name, () => addShape(def.id), 'strap')));
   const textBtn = document.createElement('button');
   textBtn.className = 'shape';
   textBtn.title = 'もじ';
@@ -125,7 +128,7 @@ async function start() {
     setTimeout(() => { const i = $('#props .text input'); i?.focus(); i?.select(); }, 30);
   });
   shapeGrid.append(textBtn);
-  side.append(title('plate', 'どだい'), tplGrid, title('group', 'かたち'), shapeGrid);
+  side.append(title('plate', 'どだい'), tplGrid, title('group', 'かたち'), shapeGrid, title('strap', 'ストラップ'), strapGrid);
 
   // ---------- ファイル読み込み ----------
   $('#fileInput').addEventListener('change', async (e) => {
@@ -200,7 +203,9 @@ async function start() {
     // 色 + 穴
     const colors = document.createElement('div');
     colors.className = 'colors';
-    PALETTE.forEach((c, idx) => {
+    // 色が固定の図形 (ストラップホール) だけを選んでいるときは、色のボタンは出さない
+    const fixedColorOnly = sel.every((i) => i.type === 'shape' && SHAPES.find((d) => d.id === i.shape)?.color);
+    if (!fixedColorOnly) PALETTE.forEach((c, idx) => {
       const b = document.createElement('button');
       b.className = 'swatch';
       b.style.background = c.hex;
@@ -214,7 +219,19 @@ async function start() {
     hb.title = 'あな';
     hb.dataset.idx = 'hole';
     hb.addEventListener('click', toggleHole);
-    colors.append(hb);
+    // ほる: 下にある作品の表面を 1mm くぼませる
+    const cb = document.createElement('button');
+    cb.className = 'swatch carve';
+    cb.title = 'ほる (この形で 下を 1mm くぼませる)';
+    cb.dataset.idx = 'carve';
+    cb.innerHTML = ICONS.carve;
+    cb.addEventListener('click', () => {
+      const r = carveSelected();
+      if (r === 'ok') toast('ほったよ（もどすときは もとにもどす）');
+      else if (r === 'empty') toast('したに ほる ものが ないよ');
+      else toast('グループは ほれないよ');
+    });
+    colors.append(hb, cb);
     props.append(colors);
 
     if (sel.length === 1) {
@@ -246,10 +263,11 @@ async function start() {
         props.append(f);
       }
       props.append(
-        numField('width', 'よこ', 'w', 'mm', { min: MIN_SIZE, apply: (i, v) => { i.w = Math.max(MIN_SIZE, v); } }),
-        numField('depth', 'たて', 'd', 'mm', { min: MIN_SIZE, apply: (i, v) => { i.d = Math.max(MIN_SIZE, v); } }),
+        numField('width', 'よこ', 'w', 'mm', { min: minSizeFor(it)[0], apply: (i, v) => { i.w = Math.max(minSizeFor(i)[0], v); } }),
+        numField('depth', 'たて', 'd', 'mm', { min: minSizeFor(it)[1], apply: (i, v) => { i.d = Math.max(minSizeFor(i)[1], v); } }),
       );
-      props.append(numField('thick', 'あつさ', 'h', 'mm', {
+      // ストラップホール (と それを含むグループ) は厚さを変えられないので、厚さの欄は出さない
+      if (!isThicknessLocked(it)) props.append(numField('thick', 'あつさ', 'h', 'mm', {
         min: MIN_THICKNESS, max: MAX_THICKNESS, stepper: true,
         get: (i) => Math.round(itemThickness(i)),
         apply: (i, v) => {
@@ -269,7 +287,9 @@ async function start() {
     props.querySelectorAll('.swatch').forEach((b) => {
       const on = b.dataset.idx === 'hole'
         ? sel.length && sel.every((i) => i.hole)
-        : sel.length && sel.every((i) => !i.hole && i.color === +b.dataset.idx);
+        : b.dataset.idx === 'carve'
+          ? false
+          : sel.length && sel.every((i) => !i.hole && i.color === +b.dataset.idx);
       b.classList.toggle('on', !!on);
     });
     if (sel.length !== 1) return;
@@ -289,7 +309,7 @@ async function start() {
     btn.copy.disabled = n === 0;
     btn.del.disabled = n === 0;
     btn.hole.disabled = n === 0;
-    btn.group.disabled = n < 2;
+    btn.group.disabled = groupableSelection().length < 2;
     btn.snap.classList.toggle('on', state.snap);
     btn.multi.classList.toggle('on', state.multi);
   }

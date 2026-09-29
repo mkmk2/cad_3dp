@@ -2,7 +2,7 @@
 // 作品データと 元に戻す / やり直し
 // ============================================================
 import { SHAPES, TEMPLATES, PALETTE, TEXT_DEFAULT, MIN_THICKNESS, MAX_THICKNESS, MIN_SIZE } from './config.js';
-import { textNaturalSize, combine, groupHeight, itemThickness, thinnestSolid } from './geometry.js';
+import { textNaturalSize, combine, groupHeight, itemThickness, thinnestSolid, computeCarve } from './geometry.js';
 
 let nextId = 1;
 const newId = () => 'i' + nextId++ + '_' + Math.random().toString(36).slice(2, 6);
@@ -77,8 +77,8 @@ export function addShape(shapeId, size) {
 
 export function addTemplate(tplId) {
   const t = TEMPLATES.find((x) => x.id === tplId);
-  const item = addShape(t.shape, t.size);
-  return item;
+  // テンプレートは、カド丸とストラップ穴が入った1つの図形として置く
+  return addShape(t.id, t.size);
 }
 
 export function addText(text = TEXT_DEFAULT) {
@@ -139,9 +139,34 @@ export function toggleHole() {
   sel.forEach((i) => {
     i.hole = makeHole;
     // 穴はつきぬけるように、最大の厚さにしておく
-    if (makeHole && i.type !== 'group') i.h = MAX_THICKNESS;
+    if (makeHole && i.type !== 'group' && !isThicknessLocked(i)) i.h = MAX_THICKNESS;
   });
   emit();
+}
+
+/**
+ * 「ほる」: 選んだ図形の形で、下にある作品の表面を 1mm くぼませる。
+ * 選んだ図形そのものは消え、くぼみだけが残る (やめたいときは「もとにもどす」)。
+ * @returns 'ok' | 'none' (ほれる図形を選んでいない) | 'empty' (下に図形がない)
+ */
+export function carveSelected() {
+  const carvers = selectedItems().filter((i) => i.type !== 'group');
+  if (!carvers.length) return 'none';
+  const rest = state.items.filter((i) => !carvers.includes(i));
+  const plans = carvers.map((c) => ({ c, targets: computeCarve(c, [c, ...rest]) })).filter((p) => p.targets.length);
+  if (!plans.length) return 'empty';
+  checkpoint();
+  for (const { targets } of plans) {
+    for (const t of targets) {
+      const S = getItem(t.id);
+      S.carves = [...(S.carves ?? []), { polys: t.polys }];
+    }
+  }
+  const used = new Set(plans.map((p) => p.c));
+  state.items = state.items.filter((i) => !used.has(i));
+  state.selected = [];
+  emit();
+  return 'ok';
 }
 
 export function setColor(idx) {
@@ -152,8 +177,14 @@ export function setColor(idx) {
   emit();
 }
 
+/** グループに入れられない図形か (ストラップホールは後から位置を変えられるよう、グループに入れない) */
+export const isUngroupable = (item) => !!defOf(item)?.noGroup;
+
+/** グループにできる図形 (選んだ中から、グループに入れられない図形を除いたもの) */
+export const groupableSelection = () => selectedItems().filter((i) => !isUngroupable(i));
+
 export function groupSelected() {
-  const sel = selectedItems();
+  const sel = groupableSelection();
   if (sel.length < 2) return;
   const merged = combine(sel);
   if (merged.isEmpty()) return;
@@ -188,7 +219,44 @@ export function thicknessRange(item) {
 }
 
 /** 厚さを変える。範囲外なら範囲内に収め、収めたかどうかを返す */
+/** 図形の定義 (基本図形のみ) */
+const defOf = (item) => (item.type === 'shape' ? SHAPES.find((s) => s.id === item.shape) : null);
+
+/**
+ * グループの中にあるストラップホールなど「小さくできない図形」について、
+ * 今の大きさが下限の何倍あるか (1 未満にはできない)。対象がなければ Infinity
+ */
+function shrinkRoom(item, scaleX = 1, scaleY = 1) {
+  if (item.type === 'group') {
+    const sx = scaleX * item.w / item.w0, sy = scaleY * item.d / item.d0;
+    return Math.min(Infinity, ...item.children.map((c) => shrinkRoom(c, sx, sy)));
+  }
+  const min = defOf(item)?.minSize;
+  if (!min) return Infinity;
+  // グループの中で回っていることもあるので、縦横どちらの縮みにも耐えられるよう小さい方で見る
+  const s = Math.min(scaleX, scaleY);
+  return Math.min((item.w * s) / min[0], (item.d * s) / min[1]);
+}
+
+/** 大きさの下限 [幅, 奥行] (mm)。ストラップホールは決まった大きさより小さくできない */
+export function minSizeFor(item) {
+  const min = defOf(item)?.minSize;
+  if (min) return [Math.max(MIN_SIZE, min[0]), Math.max(MIN_SIZE, min[1])];
+  if (item.type === 'group') {
+    const room = shrinkRoom(item);
+    if (room !== Infinity) return [Math.max(MIN_SIZE, item.w / room), Math.max(MIN_SIZE, item.d / room)];
+  }
+  return [MIN_SIZE, MIN_SIZE];
+}
+
+/** 厚さを変えられない図形か (ストラップホール、ストラップホールを含むグループ) */
+export function isThicknessLocked(item) {
+  if (item.type === 'group') return item.children.some(isThicknessLocked);
+  return !!defOf(item)?.lockThickness;
+}
+
 export function setThickness(item, value) {
+  if (isThicknessLocked(item)) return false;
   const [min, max] = thicknessRange(item);
   const want = Math.round(value);
   const t = Math.min(max, Math.max(min, want));

@@ -13,9 +13,9 @@
 // ============================================================
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { PLATE_SIZE, PALETTE, MIN_SIZE, SNAP_MM, SNAP_DEG } from './config.js';
-import { baseManifold, baseSize, toMesh, itemThickness } from './geometry.js';
-import { state, emit, checkpoint, selectedItems, select, setThickness } from './state.js';
+import { PLATE_SIZE, PALETTE, SHAPES, MIN_SIZE, SNAP_MM, SNAP_DEG } from './config.js';
+import { baseManifold, baseSize, toMesh, itemThickness, isSizeDependent } from './geometry.js';
+import { state, emit, checkpoint, selectedItems, select, setThickness, minSizeFor, isThicknessLocked } from './state.js';
 
 const DEG = Math.PI / 180;
 const HALF = PLATE_SIZE / 2;
@@ -69,8 +69,11 @@ export function createViewer(container) {
   scene.add(itemRoot);
 
   function geomKey(it) {
-    if (it.type === 'group') return 'g:' + JSON.stringify(it.children);
-    return `${it.type}:${it.shape ?? ''}:${it.text ?? ''}:${it.h}`;
+    if (it.type === 'group') return 'g:' + JSON.stringify([it.children, it.carves ?? null]);
+    // 角を丸める図形は、丸みの大きさをそろえるため 大きさが変わったら作り直す
+    const size = isSizeDependent(it) ? `:${Math.round(it.w * 100) / 100}:${Math.round(it.d * 100) / 100}` : '';
+    const carves = it.carves?.length ? ':' + JSON.stringify(it.carves) : '';
+    return `${it.type}:${it.shape ?? ''}:${it.text ?? ''}:${it.h}${size}${carves}`;
   }
 
   function buildGeometry(it) {
@@ -109,7 +112,9 @@ export function createViewer(container) {
       m.opacity = 0.45;
       m.depthWrite = false;
     } else {
-      m.color.set(PALETTE[it.color % PALETTE.length].hex);
+      // 色が固定の図形 (ストラップホール) はその色、ほかはパレットの色
+      const fixed = it.type === 'shape' ? SHAPES.find((d) => d.id === it.shape)?.color : null;
+      m.color.set(fixed ?? PALETTE[it.color % PALETTE.length].hex);
       m.transparent = false;
       m.opacity = 1;
       m.depthWrite = true;
@@ -285,7 +290,9 @@ export function createViewer(container) {
       if (u.kind === 'thick') {
         // 真上に近い視点では厚さのハンドルは使えないので隠す
         const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
-        g.children.forEach((c) => { c.visible = dir.z < 0.94; });
+        // 厚さを変えられない図形 (ストラップホール) では出さない
+        const locked = it ? isThicknessLocked(it) : false;
+        g.children.forEach((c) => { c.visible = dir.z < 0.94 && !locked; });
         // 図形の本体と重ならないよう、右奥の角の外側 (上面の高さ) に置く
         if (it && entry) g.position.set(it.w / 2 + off, it.d / 2 + off, entry.h + 0.1);
       } else if (u.kind === 'rot') {
@@ -417,7 +424,7 @@ export function createViewer(container) {
     checkpoint();
     const base = { it, x: it.x, y: it.y, w: it.w, d: it.d, rot: it.rot, t: itemThickness(it) };
     if (u.kind === 'scale') {
-      drag = { mode: 'scale', pointerId: e.pointerId, sx: u.sx, sy: u.sy, base };
+      drag = { mode: 'scale', pointerId: e.pointerId, sx: u.sx, sy: u.sy, base, min: minSizeFor(it) };
       showLabel(e, sizeText(it));
     } else if (u.kind === 'thick') {
       const normal = new THREE.Vector3().subVectors(camera.position, new THREE.Vector3(it.x, it.y, 0));
@@ -471,12 +478,12 @@ export function createViewer(container) {
       let cx = 0, cy = 0, w = b.w, d = b.d;
       if (drag.sx) {
         const fixed = -drag.sx * b.w / 2;
-        w = Math.max(MIN_SIZE, snapMm((lx - fixed) * drag.sx));
+        w = Math.max(drag.min[0], snapMm((lx - fixed) * drag.sx));
         cx = fixed + drag.sx * w / 2;
       }
       if (drag.sy) {
         const fixed = -drag.sy * b.d / 2;
-        d = Math.max(MIN_SIZE, snapMm((ly - fixed) * drag.sy));
+        d = Math.max(drag.min[1], snapMm((ly - fixed) * drag.sy));
         cy = fixed + drag.sy * d / 2;
       }
       const c2 = Math.cos(b.rot * DEG), s2 = Math.sin(b.rot * DEG);

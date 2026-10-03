@@ -29,21 +29,22 @@ function bigButton(icon, text, cls, onClick) {
 
 // ---------- 3Dプリント用の送信 ----------
 
-export function openPrintDialog(items, viewer, toast) {
+/** items を STL にして送る。onlySelected = えらんだ かたちだけを おくるとき */
+export function openPrintDialog(items, viewer, toast, onlySelected = false) {
   const stl = buildStl(items);
-  if (!stl) { toast('かたちが ないよ'); return; }
+  if (!stl) { toast(onlySelected ? 'えらんだ ものに かたちが ないよ' : 'かたちが ないよ'); return; }
   const dest = getDestination();
   const info = describe(dest);
   const { box, close } = openModal('print');
   const img = new Image();
-  img.src = viewer.snapshot();
+  img.src = viewer.snapshot(onlySelected ? items.map((i) => i.id) : null);
   img.className = 'preview';
   const msg = document.createElement('div');
   msg.className = 'dest';
   msg.innerHTML = ICONS[info.icon] + `<span>${info.text}</span>`;
   const q = document.createElement('div');
   q.className = 'question';
-  q.textContent = '3Dプリントに おくる？';
+  q.textContent = onlySelected ? 'えらんだ かたちを 3Dプリントに おくる？' : '3Dプリントに おくる？';
   const row = document.createElement('div');
   row.className = 'buttons';
   const ok = bigButton('check', 'おくる', 'primary', async () => {

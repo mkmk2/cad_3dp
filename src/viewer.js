@@ -22,6 +22,9 @@ const HALF = PLATE_SIZE / 2;
 const HANDLE_PX = 13;       // ハンドルの画面上の大きさ (px)
 const ROT_HANDLE_PX = 20;   // 回転ハンドル (丸+扇形) の大きさ (px)
 const HANDLE_OFFSET_PX = 22; // 回転・厚さハンドルを角から外へずらす量 (px)
+const THICK_HANDLE_PX = 22; // 厚さハンドル (円錐) の大きさ (px)
+const THICK_OFFSET_PX = 30; // 厚さハンドルを角から外へずらす量 (px)
+const THICK_PX_PER_MM = 14; // 真上から見たときの、厚さ 1mm あたりのドラッグ量 (px)
 const DRAG_START_PX = 4;     // これ以上動いたらドラッグとみなす (px)
 
 const round1 = (v) => Math.round(v * 10) / 10;
@@ -212,6 +215,10 @@ export function createViewer(container) {
   }
   const coneGeom = new THREE.ConeGeometry(0.6, 1.2, 16).rotateX(Math.PI / 2);
   const thickHandle = makeHandle('thick', coneGeom);
+  // 円錐の先に青い点 (真上から見ても、回転ハンドルと区別できるように)
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8).translate(0, 0, 0.6), new THREE.MeshBasicMaterial({ color: '#1565c0', depthTest: false }));
+  tip.renderOrder = 12;
+  thickHandle.add(tip);
   // 回転ハンドル: 白い丸の中に青い扇形 (角度を変えられることを示す)
   const discGeom = new THREE.CylinderGeometry(0.6, 0.6, 0.3, 32).rotateX(Math.PI / 2);
   const rotHandle = makeHandle('rot', discGeom);
@@ -288,13 +295,13 @@ export function createViewer(container) {
       const u = g.userData;
       const off = HANDLE_OFFSET_PX * perPx;
       if (u.kind === 'thick') {
-        // 真上に近い視点では厚さのハンドルは使えないので隠す
-        const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
-        // 厚さを変えられない図形 (ストラップホール) では出さない
+        // 見失わないよう、どの向きから見ても表示する (厚さを変えられないストラップホールでは出さない)
         const locked = it ? isThicknessLocked(it) : false;
-        g.children.forEach((c) => { c.visible = dir.z < 0.94 && !locked; });
+        g.children.forEach((c) => { c.visible = !locked; });
+        g.scale.setScalar(THICK_HANDLE_PX * perPx);
         // 図形の本体と重ならないよう、右奥の角の外側 (上面の高さ) に置く
-        if (it && entry) g.position.set(it.w / 2 + off, it.d / 2 + off, entry.h + 0.1);
+        const toff = THICK_OFFSET_PX * perPx;
+        if (it && entry) g.position.set(it.w / 2 + toff, it.d / 2 + toff, entry.h + 0.1);
       } else if (u.kind === 'rot') {
         // 左奥の角の外側に置く。ななめから見ても丸と扇形が分かるよう、常に画面の方を向ける
         if (it) g.position.set(-it.w / 2 - off, it.d / 2 + off, 0.05);
@@ -427,13 +434,20 @@ export function createViewer(container) {
       drag = { mode: 'scale', pointerId: e.pointerId, sx: u.sx, sy: u.sy, base, min: minSizeFor(it) };
       showLabel(e, sizeText(it));
     } else if (u.kind === 'thick') {
-      const normal = new THREE.Vector3().subVectors(camera.position, new THREE.Vector3(it.x, it.y, 0));
-      normal.z = 0;
-      normal.normalize();
-      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(it.x, it.y, 0));
-      const p = new THREE.Vector3();
-      raycaster.ray.intersectPlane(plane, p);
-      drag = { mode: 'thick', pointerId: e.pointerId, plane, z0: p.z, base };
+      // 画面上で「上方向 (厚さ +1mm)」がどちらに何px動くかを調べ、マウスの移動量を mm に直す。
+      // 真上から見たときは上方向が画面に出ないので、画面の上へのドラッグ = 厚く とする
+      const h0 = new THREE.Vector3(), h1 = new THREE.Vector3();
+      h.getWorldPosition(h0);
+      h1.copy(h0); h1.z += 1;
+      const a = toScreen(h0), b2 = toScreen(h1);
+      let ux = b2.x - a.x, uy = b2.y - a.y;
+      let len = Math.hypot(ux, uy);
+      if (len < THICK_PX_PER_MM) {
+        ux = 0; uy = -1; len = THICK_PX_PER_MM;
+      } else {
+        ux /= len; uy /= len;
+      }
+      drag = { mode: 'thick', pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, ux, uy, pxPerMm: len, base };
       showLabel(e, thickText(it));
     } else if (u.kind === 'rot') {
       const p = groundPoint();
@@ -493,9 +507,8 @@ export function createViewer(container) {
       refreshTransforms([it]);
       showLabel(e, sizeText(it));
     } else if (drag.mode === 'thick') {
-      const p = new THREE.Vector3();
-      if (!raycaster.ray.intersectPlane(drag.plane, p)) return;
-      const want = Math.round(b.t + (p.z - drag.z0));
+      const mm = ((e.clientX - drag.x0) * drag.ux + (e.clientY - drag.y0) * drag.uy) / drag.pxPerMm;
+      const want = Math.round(b.t + mm);
       const before = itemThickness(b.it);
       const clamped = setThickness(b.it, want);
       if (itemThickness(b.it) !== before) {
@@ -638,12 +651,18 @@ export function createViewer(container) {
   });
 
   /** 確認ダイアログ用の画像 (ハンドルを隠して撮る) */
-  function snapshot() {
+  /** プレビュー画像。ids を渡すと、その部品だけを写す */
+  function snapshot(ids = null) {
     const hv = handleRoot.visible;
     handleRoot.visible = false;
+    const hidden = [];
+    if (ids) meshes.forEach((e, id) => { if (!ids.includes(id) && e.mesh.visible) { e.mesh.visible = false; hidden.push(e.mesh); } });
+    // 選択中の明るさは写さない (はみだしの赤はそのまま)
+    const lit = [];
+    meshes.forEach((e) => { if (!e.outside && e.mesh.material.emissive.getHex() !== 0) { lit.push([e.mesh.material, e.mesh.material.emissive.getHex()]); e.mesh.material.emissive.set(0); } });
     // 作品全体が大きく写るように、一時的にカメラを寄せる
     const box = new THREE.Box3();
-    meshes.forEach((e) => box.expandByObject(e.mesh));
+    meshes.forEach((e) => { if (e.mesh.visible) box.expandByObject(e.mesh); });
     const saved = { pos: camera.position.clone(), target: controls.target.clone() };
     if (!box.isEmpty()) {
       const center = box.getCenter(new THREE.Vector3());
@@ -659,7 +678,18 @@ export function createViewer(container) {
     controls.target.copy(saved.target);
     controls.update();
     handleRoot.visible = hv;
+    hidden.forEach((m) => { m.visible = true; });
+    lit.forEach(([m, hex]) => m.emissive.setHex(hex));
+    renderer.render(scene, camera);
     return url;
+  }
+
+  // 3D座標 → 画面座標 (px)
+  function toScreen(v) {
+    camera.updateMatrixWorld();
+    const q = v.clone().project(camera);
+    const r = el.getBoundingClientRect();
+    return { x: (q.x + 1) / 2 * r.width, y: (1 - q.y) / 2 * r.height };
   }
 
   // テスト用: 3D座標 → 画面座標

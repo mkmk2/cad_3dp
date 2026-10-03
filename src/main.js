@@ -56,7 +56,11 @@ async function start() {
     saveProject(state.items);
     toast('ほぞんしたよ');
   });
-  btn.print = button('print', '3Dプリントに おくる', () => openPrintDialog(state.items, viewer, toast), 'primary');
+  // えらんでいる かたちが あれば それだけ、なければ ぜんぶ を おくる
+  btn.print = button('print', '3Dプリントに おくる', () => {
+    const sel = selectedItems();
+    openPrintDialog(sel.length ? sel : state.items, viewer, toast, sel.length > 0);
+  }, 'primary');
   btn.undo = button('undo', 'もとにもどす', undo);
   btn.redo = button('redo', 'やりなおす', redo);
   btn.copy = button('copy', 'コピー', duplicateSelected);
